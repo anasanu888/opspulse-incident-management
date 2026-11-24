@@ -1,0 +1,125 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["8080:80"]
+    volumes: ["./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on: [api-service, web-dashboard]
+    networks: [frontend]
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes: ["mysql_data:/var/lib/mysql", "./mysql/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [backend]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+    restart: unless-stopped
+
+  api-service:
+    build: {context: ., dockerfile: services/api-service/Dockerfile}
+    environment:
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+    depends_on:
+      redis: {condition: service_healthy}
+    networks: [frontend, backend]
+    restart: unless-stopped
+
+  event-ingestor:
+    build: {context: ., dockerfile: services/event-ingestor/Dockerfile}
+    environment:
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+    restart: unless-stopped
+
+  rule-engine:
+    build: {context: ., dockerfile: services/rule-engine/Dockerfile}
+    environment:
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+    restart: unless-stopped
+
+  remediation-worker:
+    build: {context: ., dockerfile: services/remediation-worker/Dockerfile}
+    environment:
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+    restart: unless-stopped
+
+  notification-service:
+    build: {context: ., dockerfile: services/notification-service/Dockerfile}
+    environment:
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+    depends_on:
+      redis: {condition: service_healthy}
+    networks: [backend]
+    restart: unless-stopped
+
+  web-dashboard:
+    build: {context: ., dockerfile: services/web-dashboard/Dockerfile}
+    environment:
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    depends_on:
+      mysql: {condition: service_healthy}
+    networks: [frontend, backend]
+    restart: unless-stopped
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+volumes:
+  mysql_data: {}
+  redis_data: {}
